@@ -2,78 +2,99 @@ import streamlit as st
 import pandas as pd
 from io import BytesIO
 
-st.set_page_config(page_title="Data Mapper", layout="wide")
+st.set_page_config(page_title="Multi-Sheet Data Mapper", layout="wide")
+st.title("Excel Multi-Sheet & Filter Tool")
 
-st.markdown("### 📊 Excel Data Mapping Tool")
+# Sidebar - File Upload
+st.sidebar.header("📂 Upload Files")
+main_file = st.sidebar.file_uploader("Upload Main.xlsx (Copy)", type=['xlsx'])
+trans_file = st.sidebar.file_uploader("Upload Transport.xlsx (Paste)", type=['xlsx'])
 
-# Sidebar එකේ file upload කරන්න ඉඩ ලබා දීම
-st.sidebar.header("Upload Files")
-main_file = st.sidebar.file_uploader("Upload Copy File (Main.xlsx)", type=['xlsx'])
-trans_file = st.sidebar.file_uploader("Upload Paste File (Transport.xlsx)", type=['xlsx'])
+# දත්ත ගබඩා කිරීමට තාවකාලික Variables
+df_main = None
+df_trans = None
 
-if main_file and trans_file:
-    df_main = pd.read_excel(main_file)
-    df_trans = pd.read_excel(trans_file)
+col_a, col_b = st.columns(2)
+
+# --- Main File එකේ Sheet එක තේරීම ---
+with col_a:
+    if main_file:
+        st.subheader("1. Source Sheet")
+        # ගොනුවේ ඇති සියලුම sheet නම් ලබා ගැනීම
+        xl_main = pd.ExcelFile(main_file)
+        sheet_main = st.selectbox("Select the sheet to work on in the main file.", xl_main.sheet_names)
+        df_main = pd.read_excel(main_file, sheet_name=sheet_main)
+        st.write(f"Data rows {len(df_main)}s met")
+
+# --- Transport File එකේ Sheet එක තේරීම ---
+with col_b:
+    if trans_file:
+        st.subheader("2. Destination Sheet")
+        xl_trans = pd.ExcelFile(trans_file)
+        sheet_trans = st.selectbox("Select the sheet to work with in the transport file.", xl_trans.sheet_names)
+        df_trans = pd.read_excel(trans_file, sheet_name=sheet_trans)
+        st.write(f"Heading {len(df_trans.columns)} s met.")
+
+st.divider()
+
+# දෙකම තෝරාගෙන තිබේ නම් පමණක් ඉදිරියට යන්න
+if df_main is not None and df_trans is not None:
     
-    main_cols = df_main.columns.tolist()
-    trans_cols = df_trans.columns.tolist()
+    # --- Filter Section (පේළි Filter කිරීම) ---
+    st.subheader("🎯 3. Row Filter")
+    enable_filter = st.checkbox("Tick ​​this to filter data.")
+    
+    active_df = df_main.copy()
+    if enable_filter:
+        f_col1, f_col2 = st.columns(2)
+        with f_col1:
+            filter_col = st.selectbox("The column to be filtered", df_main.columns)
+        with f_col2:
+            unique_vals = df_main[filter_col].unique().tolist()
+            selected_vals = st.multiselect(f"'{filter_col}'Select the values ​​of", unique_vals)
+        
+        if selected_vals:
+            active_df = df_main[df_main[filter_col].isin(selected_vals)]
+            st.info(f"Number of filtered rows: {len(active_df)}")
 
-    st.write("---")
-    st.markdown("#### Select & Map Columns")
-    st.caption("Select the column to be copied on the left and select which column on the right it should be pasted into.")
+    st.divider()
 
-    # Table එකක් වගේ පෙනෙන්නට Header එකක් හදමු
+    # --- Mapping Section ---
+    st.subheader("🔗 4. Map Columns")
+    mapping_dict = {}
+    
     h1, h2, h3 = st.columns([0.5, 2, 2])
     h1.write("**Select**")
-    h2.write("**Copy From (Main.xlsx)**")
-    h3.write("**Paste To (Transport.xlsx)**")
+    h2.write(f"**Source ({sheet_main})**")
+    h3.write(f"**Destination ({sheet_trans})**")
 
-    mapping_results = {}
-
-    # Main file එකේ තීරු ලැයිස්තුව පෙන්වීම
-    for i, m_col in enumerate(main_cols):
+    for i, m_col in enumerate(active_df.columns):
         c1, c2, c3 = st.columns([0.5, 2, 2])
-        
         with c1:
-            is_selected = st.checkbox("", key=f"check_{i}")
-        
+            checked = st.checkbox("", key=f"chk_{i}")
         with c2:
-            st.info(f"{m_col}") # Copy කරන column එකේ නම
-            
+            st.info(m_col)
         with c3:
-            if is_selected:
-                # දකුණු පැත්තේ ඇති Heading එක තෝරාගැනීම
-                target_col = st.selectbox(
-                    f"Map {m_col} to:", 
-                    options=trans_cols, 
-                    key=f"target_{i}",
-                    label_visibility="collapsed"
-                )
-                mapping_results[m_col] = target_col
-            else:
-                st.text_input("Not Selected", disabled=True, key=f"dis_{i}", label_visibility="collapsed")
+            if checked:
+                target = st.selectbox(f"Map {i}", df_trans.columns, key=f"tar_{i}", label_visibility="collapsed")
+                mapping_dict[m_col] = target
 
-    st.write("---")
-    
-    # Paste Button
-    if st.button("🚀 Execute Paste Operation", use_container_width=True):
-        if mapping_results:
+    # --- Execute ---
+    if st.button("🚀 Process & Download", use_container_width=True):
+        if mapping_dict:
             try:
-                # දත්ත මාරු කිරීම (Heading වෙනස් නොවේ)
-                for m_col, t_col in mapping_results.items():
-                    df_trans[t_col] = df_main[m_col]
+                # දත්ත ගලපා අලුත් DataFrame එකක් සෑදීම
+                final_df = pd.DataFrame(columns=df_trans.columns)
+                for src, dest in mapping_dict.items():
+                    final_df[dest] = active_df[src].values
                 
-                # ගොනුව සකස් කිරීම
                 output = BytesIO()
                 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                    df_trans.to_excel(writer, index=False)
+                    final_df.to_excel(writer, index=False)
                 
-                st.success("Data transfer successful! Download the file using the button below.")
-                st.download_button("📥 Download Updated Transport File", output.getvalue(), "Updated_Transport.xlsx")
+                st.success("Success!")
+                st.download_button("📥 Download Excel", output.getvalue(), "Updated_Data.xlsx")
             except Exception as e:
                 st.error(f"Error: {e}")
         else:
             st.warning("Please select at least one column.")
-
-else:
-    st.info("To get started, upload the two Excel files from the sidebar on the left.")
